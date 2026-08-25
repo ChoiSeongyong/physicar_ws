@@ -126,6 +126,14 @@ TELEMETRY_CSV = os.environ.get("PC_TELEMETRY_CSV", "")
 # the established controller byte-for-byte equivalent in behaviour.
 CONE_EXIT_HOLD_S = float(os.environ.get("PC_CONE_EXIT_HOLD_S", 0) or 0)
 
+# v3: a time-only hold changes its physical meaning whenever the speed cap
+# changes. At 0.60 m/s the v2 0.18 s hold is only 10.8 cm; during cone braking
+# it is less, even though the rear-clearance problem is geometric. This optional
+# distance mode integrates already-commanded forward motion after the LiDAR
+# correction ends, so it survives a cone-induced speed change without using a
+# SIM route, object identity, or pose. If both modes are given, distance wins.
+CONE_EXIT_HOLD_M = float(os.environ.get("PC_CONE_EXIT_HOLD_M", 0) or 0)
+
 
 def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
@@ -354,11 +362,13 @@ def main():
     last_speed = 0.0
     last_steer = 0.0
     flip_pending = 0
-    # Retains an avoidance *direction* only after a cone was genuinely close.
-    # It is deliberately time-bounded and exponentially fades to zero, so a
-    # missed lidar frame cannot turn into a permanent steering memory.
+    # Retains an avoidance direction only after a cone was genuinely close.
+    # It is bounded by time or travelled distance and fades to zero, so a missed
+    # LiDAR frame cannot turn into a permanent steering memory.
     cone_exit_ff = 0.0
     cone_exit_until = 0.0
+    cone_exit_remaining_m = 0.0
+    cone_exit_last_tick = None
     try:
         while running[0]:
             tick = time.time()
@@ -416,26 +426,46 @@ def main():
                                 min(gains.steer_limit, steer + cff))
 
                 # Keep the just-computed cone-avoidance direction through the
-                # rear-clearance interval.  `cones.bias()` has already decided
+                # rear-clearance interval. `cones.bias()` has already decided
                 # the correction from camera/LiDAR geometry; this adds no SIM
-                # pose, route, or object information.  A current measurement
-                # always wins.  The hold begins only after the correction ends,
+                # pose, route, or object information. A current measurement
+                # always wins. The hold begins only after the correction ends,
                 # avoiding a stale command while the cone is still approaching.
+                #
+                # v2 used a fixed time. v3 optionally holds through a *distance*
+                # travelled at the commanded speed, which keeps the physical
+                # rear-clearance margin stable when cone braking changes speed.
                 now = time.time()
                 if cff:
                     cone_exit_ff = cff
                     cone_exit_until = 0.0
-                elif CONE_EXIT_HOLD_S > 0 and cone_exit_ff and not cone_exit_until:
-                    cone_exit_until = now + CONE_EXIT_HOLD_S
+                    cone_exit_remaining_m = 0.0
+                    cone_exit_last_tick = None
+                elif cone_exit_ff and not cone_exit_until and not cone_exit_remaining_m:
+                    if CONE_EXIT_HOLD_M > 0:
+                        cone_exit_remaining_m = CONE_EXIT_HOLD_M
+                        cone_exit_last_tick = now
+                    elif CONE_EXIT_HOLD_S > 0:
+                        cone_exit_until = now + CONE_EXIT_HOLD_S
                 exit_ff = 0.0
-                if cone_exit_until > now:
+                if cone_exit_remaining_m > 0:
+                    dt = max(0.0, min(now - (cone_exit_last_tick or now), 0.25))
+                    cone_exit_last_tick = now
+                    cone_exit_remaining_m = max(0.0, cone_exit_remaining_m - speed * dt)
+                    remaining = cone_exit_remaining_m / CONE_EXIT_HOLD_M
+                    exit_ff = cone_exit_ff * max(0.0, min(1.0, remaining))
+                elif cone_exit_until > now:
                     remaining = (cone_exit_until - now) / CONE_EXIT_HOLD_S
                     exit_ff = cone_exit_ff * max(0.0, min(1.0, remaining))
-                    steer = max(-gains.steer_limit,
-                                min(gains.steer_limit, steer + exit_ff))
                 elif cone_exit_until:
                     cone_exit_ff = 0.0
                     cone_exit_until = 0.0
+                if exit_ff:
+                    steer = max(-gains.steer_limit,
+                                min(gains.steer_limit, steer + exit_ff))
+                elif not cone_exit_remaining_m and not cone_exit_until:
+                    cone_exit_ff = 0.0
+                    cone_exit_last_tick = None
                 if SETTLE:
                     steer, flip_pending = control.settle(
                         steer, last_steer, flip_pending)
