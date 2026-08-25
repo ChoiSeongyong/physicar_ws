@@ -5,9 +5,10 @@
 # 자동 전환한다. 이 파일은 첫 실차 주행용 보수 속도 설정만 제공한다.
 #
 # 사용 전: 차를 바닥에 놓고, 바퀴가 뜬 상태에서 먼저 카메라/조향을 확인한다.
-# 첫 주행(60초 제한):
+# 실전 주행(시간 제한 없음):
 #   PC_REAL_CONFIRM=YES source /home/physicar/physicar_ws/run_real.sh
 # 중단: 이 터미널에서 Ctrl+C (t_run.sh의 trap이 속도·조향을 모두 0으로 보낸다).
+# 로컬 검증에서만 PC_MAX_SECONDS=60처럼 명시적으로 제한 시간을 줄 수 있다.
 
 # 물리적인 차를 실제로 움직이는 명령이므로, 오타나 자동 실행으로 인한 출발을 막는다.
 if [ "${PC_REAL_CONFIRM:-}" != "YES" ]; then
@@ -22,7 +23,9 @@ fi
 : "${PC_SPEED_MIN:=0.35}"
 : "${PC_CONE_SLOW_MAX:=0.55}"
 : "${PC_CONE_SLOW_MIN:=0.35}"
-: "${PC_MAX_SECONDS:=60}"
+# 실전은 완주까지 계속 주행한다. PC_MAX_SECONDS는 SIM/로컬 검증 때만 호출자가
+# 명시적으로 지정하는 안전 타이머이며, 여기서 기본값을 만들지 않는다.
+: "${PC_MAX_SECONDS:=}"
 : "${PC_WAIT_GREEN:=1}"
 : "${PC_COURSE_AUTO:=0}"
 : "${PC_CONE_MODEL:=}"
@@ -36,7 +39,9 @@ export PC_MAX_SECONDS PC_WAIT_GREEN PC_COURSE_AUTO PC_CONE_MODEL PC_TELEMETRY_CS
 _pc_real_src="${BASH_SOURCE[0]:-$0}"
 _pc_real_dir="$(cd "$(dirname "$_pc_real_src")" >/dev/null 2>&1 && pwd)"
 
-echo "[real] 실차 보수 시험: max=${PC_SPEED_MAX}m/s, cone=${PC_CONE_SLOW_MAX}m/s, timeout=${PC_MAX_SECONDS}s"
+_pc_timeout="무제한(완주까지)"
+[ -z "$PC_MAX_SECONDS" ] || _pc_timeout="${PC_MAX_SECONDS}s (검증 제한)"
+echo "[real] 실차 보수 시험: max=${PC_SPEED_MAX}m/s, cone=${PC_CONE_SLOW_MAX}m/s, timeout=${_pc_timeout}"
 [ -z "$PC_TELEMETRY_CSV" ] || echo "[real] 텔레메트리: $PC_TELEMETRY_CSV"
 echo "[real] 신호등·카메라 확인 후 출발합니다. 즉시 중단은 Ctrl+C입니다."
 PC_TARGET=real PC_ENTRY=race/run.py source "$_pc_real_dir/t_run.sh"
