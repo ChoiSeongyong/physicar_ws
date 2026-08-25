@@ -26,13 +26,17 @@ fi
 : "${PC_WAIT_GREEN:=1}"
 : "${PC_COURSE_AUTO:=0}"
 : "${PC_CONE_MODEL:=}"
+# 빈 값이면 기존과 동일하게 기록하지 않는다. 값을 주면 다음 실차 주행의 센서·명령
+# 기록을 CSV로 남겨 속도 상향 같은 고도화를 실제 데이터로 판단할 수 있다.
+: "${PC_TELEMETRY_CSV:=}"
 
 export PC_SPEED_MAX PC_SPEED_MIN PC_CONE_SLOW_MAX PC_CONE_SLOW_MIN
-export PC_MAX_SECONDS PC_WAIT_GREEN PC_COURSE_AUTO PC_CONE_MODEL
+export PC_MAX_SECONDS PC_WAIT_GREEN PC_COURSE_AUTO PC_CONE_MODEL PC_TELEMETRY_CSV
 
 _pc_real_src="${BASH_SOURCE[0]:-$0}"
 _pc_real_dir="$(cd "$(dirname "$_pc_real_src")" >/dev/null 2>&1 && pwd)"
 
 echo "[real] 실차 보수 시험: max=${PC_SPEED_MAX}m/s, cone=${PC_CONE_SLOW_MAX}m/s, timeout=${PC_MAX_SECONDS}s"
+[ -z "$PC_TELEMETRY_CSV" ] || echo "[real] 텔레메트리: $PC_TELEMETRY_CSV"
 echo "[real] 신호등·카메라 확인 후 출발합니다. 즉시 중단은 Ctrl+C입니다."
 PC_TARGET=real PC_ENTRY=race/run.py source "$_pc_real_dir/t_run.sh"

@@ -14,6 +14,7 @@ Written around the two rules that shape everything else:
 No simulator-only imports: `tools/` uses ground-truth pose and teleporting and
 must never be reachable from here.
 """
+import csv
 import math
 import os
 import signal
@@ -110,9 +111,55 @@ SETTLE = os.environ.get("PC_SETTLE", "1") == "1"
 CONE_MODEL = os.environ.get("PC_CONE_MODEL", "")
 REVERSE_SECONDS = float(os.environ.get("PC_REVERSE_SECONDS", 0.8))
 
+# 실차 고도화는 한 번의 인상적인 주행보다 반복 가능한 근거가 중요하다. 환경변수로
+# 지정하면 매 제어 주기의 센서 추정·명령을 CSV에 남긴다. 비어 있으면 기존과 같은
+# 저부하 동작이며, 기록 실패가 주행을 중단시키지 않는다.
+TELEMETRY_CSV = os.environ.get("PC_TELEMETRY_CSV", "")
+
 
 def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+class Telemetry:
+    """Optional CSV logger that can never become a control-loop failure."""
+
+    fields = ("elapsed_s", "source", "offset", "slope", "view", "conf",
+              "speed_cmd", "steer_cmd_deg", "cone_count", "cone_distance_m",
+              "cone_bearing_deg", "cone_ff_deg", "cone_speed_cap_mps")
+
+    def __init__(self, path):
+        self.file = None
+        self.writer = None
+        if not path:
+            return
+        try:
+            self.file = open(path, "w", newline="", encoding="utf-8")
+            self.writer = csv.DictWriter(self.file, fieldnames=self.fields)
+            self.writer.writeheader()
+            self.file.flush()
+            log(f"텔레메트리 기록: {path}")
+        except OSError as exc:
+            log(f"텔레메트리 기록 비활성화: {exc}")
+            self.close()
+
+    def write(self, row):
+        if self.writer is None:
+            return
+        try:
+            self.writer.writerow(row)
+        except OSError as exc:
+            log(f"텔레메트리 기록 오류(비활성화): {exc}")
+            self.close()
+
+    def close(self):
+        if self.file is not None:
+            try:
+                self.file.close()
+            except OSError:
+                pass
+        self.file = None
+        self.writer = None
 
 
 def _rehearsal(img, t):
@@ -281,6 +328,7 @@ def main():
     wait_for_green(car)
 
     t0 = time.time()
+    telemetry = Telemetry(TELEMETRY_CSV)
     n = miss = errors = 0
     last_log = 0.0
 
@@ -309,6 +357,8 @@ def main():
                     time.sleep(0.1)
                     continue
                 est = lane.detect(img)
+                seen = []
+                cff, cs = 0.0, None
                 if AVOID_CONES:
                     try:
                         detector = holder["detector"]
@@ -375,6 +425,23 @@ def main():
 
                 car.drive(speed, steer)
 
+                near = seen[0] if seen else None
+                telemetry.write({
+                    "elapsed_s": f"{tick - t0:.3f}",
+                    "source": est.source,
+                    "offset": f"{est.offset:.4f}",
+                    "slope": f"{est.slope:.4f}",
+                    "view": f"{est.view:.4f}",
+                    "conf": f"{est.conf:.4f}",
+                    "speed_cmd": f"{speed:.3f}",
+                    "steer_cmd_deg": f"{steer:.3f}",
+                    "cone_count": len(seen),
+                    "cone_distance_m": "" if near is None else f"{near.distance:.3f}",
+                    "cone_bearing_deg": "" if near is None else f"{near.bearing:.3f}",
+                    "cone_ff_deg": f"{cff:.3f}",
+                    "cone_speed_cap_mps": "" if cs is None else f"{cs:.3f}",
+                })
+
                 if tick - last_log >= 2.0:
                     last_log = tick
                     log(f"{est.source:5s} off={est.offset:+.2f} "
@@ -393,6 +460,7 @@ def main():
             car.stop()
         except Exception:                         # noqa: BLE001
             pass
+        telemetry.close()
         dt = max(time.time() - t0, 1e-6)
         log(f"정지. {n} ticks / {dt:.1f}s ({n / dt:.1f} Hz), "
             f"프레임 없음 {miss}회, 오류 {errors}회")
