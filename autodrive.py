@@ -116,6 +116,16 @@ REVERSE_SECONDS = float(os.environ.get("PC_REVERSE_SECONDS", 0.8))
 # 저부하 동작이며, 기록 실패가 주행을 중단시키지 않는다.
 TELEMETRY_CSV = os.environ.get("PC_TELEMETRY_CSV", "")
 
+# A cone detector normally stops producing a steering correction at COMMIT_M.
+# That is correct for the cone's centre, but not necessarily for the car's rear:
+# the simulator repeatedly showed a car clearing a cone with its nose and then
+# clipping it while immediately returning to the lane centre.  On the real car
+# we cannot use a route/object identity, so retain only the *last measured*
+# sensor-based correction for a short, ramped time after the cone passes under
+# the front sensor.  It is opt-in for a staged real-car candidate; zero keeps
+# the established controller byte-for-byte equivalent in behaviour.
+CONE_EXIT_HOLD_S = float(os.environ.get("PC_CONE_EXIT_HOLD_S", 0) or 0)
+
 
 def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
@@ -126,7 +136,8 @@ class Telemetry:
 
     fields = ("elapsed_s", "source", "offset", "slope", "view", "conf",
               "speed_cmd", "steer_cmd_deg", "cone_count", "cone_distance_m",
-              "cone_bearing_deg", "cone_ff_deg", "cone_speed_cap_mps")
+              "cone_bearing_deg", "cone_ff_deg", "cone_exit_ff_deg",
+              "cone_speed_cap_mps")
 
     def __init__(self, path):
         self.file = None
@@ -343,6 +354,11 @@ def main():
     last_speed = 0.0
     last_steer = 0.0
     flip_pending = 0
+    # Retains an avoidance *direction* only after a cone was genuinely close.
+    # It is deliberately time-bounded and exponentially fades to zero, so a
+    # missed lidar frame cannot turn into a permanent steering memory.
+    cone_exit_ff = 0.0
+    cone_exit_until = 0.0
     try:
         while running[0]:
             tick = time.time()
@@ -398,6 +414,28 @@ def main():
                 if cff:
                     steer = max(-gains.steer_limit,
                                 min(gains.steer_limit, steer + cff))
+
+                # Keep the just-computed cone-avoidance direction through the
+                # rear-clearance interval.  `cones.bias()` has already decided
+                # the correction from camera/LiDAR geometry; this adds no SIM
+                # pose, route, or object information.  A current measurement
+                # always wins.  The hold begins only after the correction ends,
+                # avoiding a stale command while the cone is still approaching.
+                now = time.time()
+                if cff:
+                    cone_exit_ff = cff
+                    cone_exit_until = 0.0
+                elif CONE_EXIT_HOLD_S > 0 and cone_exit_ff and not cone_exit_until:
+                    cone_exit_until = now + CONE_EXIT_HOLD_S
+                exit_ff = 0.0
+                if cone_exit_until > now:
+                    remaining = (cone_exit_until - now) / CONE_EXIT_HOLD_S
+                    exit_ff = cone_exit_ff * max(0.0, min(1.0, remaining))
+                    steer = max(-gains.steer_limit,
+                                min(gains.steer_limit, steer + exit_ff))
+                elif cone_exit_until:
+                    cone_exit_ff = 0.0
+                    cone_exit_until = 0.0
                 if SETTLE:
                     steer, flip_pending = control.settle(
                         steer, last_steer, flip_pending)
@@ -439,6 +477,7 @@ def main():
                     "cone_distance_m": "" if near is None else f"{near.distance:.3f}",
                     "cone_bearing_deg": "" if near is None else f"{near.bearing:.3f}",
                     "cone_ff_deg": f"{cff:.3f}",
+                    "cone_exit_ff_deg": f"{exit_ff:.3f}",
                     "cone_speed_cap_mps": "" if cs is None else f"{cs:.3f}",
                 })
 
