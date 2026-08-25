@@ -1,0 +1,18 @@
+# PhysiCar workspace files not needed for this driving-code repository
+.devcontainer/
+codms/
+examples/
+physicar_race/
+ppo/
+
+# Generated artifacts and local delivery files
+race/results/
+__pycache__/
+*.py[cod]
+*.onnx
+*.zip
+
+# Unrelated workspace files
+app.physicar
+README.md
+health.py
