@@ -19,11 +19,12 @@ fi
 _pc_v6_src="${BASH_SOURCE[0]:-$0}"
 _pc_v6_dir="$(cd "$(dirname "$_pc_v6_src")" >/dev/null 2>&1 && pwd)"
 
-# v4의 검증된 안전/속도/콘 값은 그대로 유지한다.
-: "${PC_SPEED_MAX:=1.30}"
-: "${PC_SPEED_MIN:=0.45}"
-: "${PC_CONE_SLOW_MAX:=0.80}"
-: "${PC_CONE_SLOW_MIN:=0.45}"
+# v4 안전 제어 로직은 그대로 두되, v6-1 실차 후보의 기본 운용 속도는
+# 저속 스모크 기준으로 둔다. 호출 시 환경변수를 주면 그 값이 우선한다.
+: "${PC_SPEED_MAX:=0.80}"
+: "${PC_SPEED_MIN:=0.40}"
+: "${PC_CONE_SLOW_MAX:=0.65}"
+: "${PC_CONE_SLOW_MIN:=0.38}"
 : "${PC_CONE_EXIT_HOLD_M:=0.11}"
 : "${PC_CONE_EXIT_HOLD_S:=0}"
 
