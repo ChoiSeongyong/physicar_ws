@@ -207,7 +207,8 @@ def kill_process(proc):
         pass
 
 
-def run_once(label, env_overrides, log_path, hard_cutoff_s=HARD_CUTOFF_S):
+def run_once(label, env_overrides, log_path, hard_cutoff_s=HARD_CUTOFF_S,
+             entry="race/run.py"):
     # Persist the immutable world identity with every score. This prevents
     # results from different installed AMET/practice worlds being compared as
     # though they came from the same course.
@@ -256,10 +257,14 @@ def run_once(label, env_overrides, log_path, hard_cutoff_s=HARD_CUTOFF_S):
     env.update({k: str(v) for k, v in env_overrides.items()})
     env.pop("PC_MAX_SECONDS", None)   # the judge decides when the run ends
 
-    # Run the EXACT entry point run_real.sh uses (race/run.py, PC_TARGET=real),
-    # not autodrive.py directly, so this pre-screens the real invocation itself.
+    # Run the selected sensor-controller entry point with PC_TARGET=real.
+    # The default remains race/run.py, matching run_real.sh.  Versioned v6
+    # candidates are passed directly so shadow results test their actual code.
+    entry_path = WORKSPACE / entry
+    if not entry_path.is_file():
+        raise FileNotFoundError(f"entry point not found: {entry}")
     log = open(log_path, "w", encoding="utf-8")
-    proc = subprocess.Popen([sys.executable, "-u", "race/run.py"],
+    proc = subprocess.Popen([sys.executable, "-u", entry],
                             cwd=WORKSPACE, env=env, stdout=log, stderr=subprocess.STDOUT)
 
     def cone_moved(cur, base):
@@ -436,6 +441,7 @@ def run_once(label, env_overrides, log_path, hard_cutoff_s=HARD_CUTOFF_S):
         "world_id": world_info.get("world_id"),
         "world_rev": world_info.get("rev"),
         "env": env_overrides,
+        "entry": entry,
         "finished": finished,
         "lap_time_s": lap_time,
         "cone_hits": len(cones_hit),
@@ -472,14 +478,17 @@ def main():
     ap.add_argument("--label", required=True)
     ap.add_argument("--set", dest="sets", action="append",
                     help="NAME=VALUE env override for autodrive.py; repeatable")
-    ap.add_argument("--log", default=None, help="path to write autodrive's stdout/stderr")
+    ap.add_argument("--log", default=None, help="path to write controller stdout/stderr")
+    ap.add_argument("--entry", default="race/run.py",
+                    help="workspace-relative controller entry point (default: race/run.py)")
     ap.add_argument("--cutoff", type=float, default=HARD_CUTOFF_S,
                     help="hard wall-clock abort in seconds (safety net beyond the 180s rule)")
     args = ap.parse_args()
 
     env_overrides = parse_sets(args.sets)
     log_path = Path(args.log) if args.log else Path(f"/tmp/shadow_{args.label}.log")
-    run_once(args.label, env_overrides, log_path, hard_cutoff_s=args.cutoff)
+    run_once(args.label, env_overrides, log_path, hard_cutoff_s=args.cutoff,
+             entry=args.entry)
 
 
 if __name__ == "__main__":
